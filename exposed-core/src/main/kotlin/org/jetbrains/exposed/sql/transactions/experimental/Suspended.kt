@@ -51,14 +51,15 @@ suspend fun <T> newSuspendedTransaction(
     context: CoroutineDispatcher? = null,
     db: Database? = null,
     transactionIsolation: Int? = null,
+    coroutineElementBuilder: ((Lazy<Transaction>, TransactionManager) -> CoroutineContext)? = null,
     statement: suspend Transaction.() -> T
 ): T =
-    withTransactionScope(context, null, db, transactionIsolation) {
+    withTransactionScope(context, null, db, transactionIsolation, coroutineElementBuilder) {
         suspendedTransactionAsyncInternal(true, statement).await()
     }
 
 suspend fun <T> Transaction.suspendedTransaction(context: CoroutineDispatcher? = null, statement: suspend Transaction.() -> T): T =
-    withTransactionScope(context, this, db = null, transactionIsolation = null) {
+    withTransactionScope(context, this, db = null, transactionIsolation = null, coroutineElementBuilder = null) {
         suspendedTransactionAsyncInternal(false, statement).await()
     }
 
@@ -69,7 +70,7 @@ suspend fun <T> suspendedTransactionAsync(
     statement: suspend Transaction.() -> T
 ): Deferred<T> {
     val currentTransaction = TransactionManager.currentOrNull()
-    return withTransactionScope(context, null, db, transactionIsolation) {
+    return withTransactionScope(context, null, db, transactionIsolation, null) {
         suspendedTransactionAsyncInternal(!holdsSameTransaction(currentTransaction), statement)
     }
 }
@@ -93,6 +94,7 @@ private suspend fun <T> withTransactionScope(
     currentTransaction: Transaction?,
     db: Database? = null,
     transactionIsolation: Int?,
+    coroutineElementBuilder: ((Lazy<Transaction>, TransactionManager) -> CoroutineContext)? = null,
     body: suspend TransactionScope.() -> T
 ): T {
     val currentScope = coroutineContext[TransactionScope]
@@ -101,7 +103,8 @@ private suspend fun <T> withTransactionScope(
 
         val tx = lazy(LazyThreadSafetyMode.NONE) { _tx ?: manager.newTransaction(transactionIsolation ?: manager.defaultIsolationLevel) }
 
-        val element = TransactionCoroutineElement(tx, manager)
+        val effectiveElementBuilder = coroutineElementBuilder ?: { t, m -> TransactionCoroutineElement(t, m) }
+        val element = effectiveElementBuilder(tx, manager)
 
         val newContext = context ?: coroutineContext
 
